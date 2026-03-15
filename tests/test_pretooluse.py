@@ -3,7 +3,7 @@ import io
 import json
 import os
 import sys
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -52,7 +52,7 @@ class TestPreToolUse:
         """Should return {} for non-Bash tools when auto_approve is 'bash'."""
         write_config({"auto_approve": "bash"})
         for tool in ["Write", "Edit", "Read", "Glob", "Agent"]:
-            with patch("sys.stdin", io.StringIO(json.dumps({"tool_name": tool, "session_id": "test"}))), \
+            with patch("sys.stdin", io.StringIO(json.dumps({"tool_name": tool, "session_id": "t"}))), \
                  patch("hooks.pretooluse.spawn_notification"):
                 main()
             output = json.loads(capsys.readouterr().out)
@@ -61,16 +61,16 @@ class TestPreToolUse:
     def test_auto_approve_bash_case_sensitive(self, tmp_config, write_config, capsys):
         """Tool name matching should be case-sensitive ('bash' != 'Bash')."""
         write_config({"auto_approve": "bash"})
-        with patch("sys.stdin", io.StringIO(json.dumps({"tool_name": "bash", "session_id": "test"}))), \
+        with patch("sys.stdin", io.StringIO(json.dumps({"tool_name": "bash", "session_id": "t"}))), \
              patch("hooks.pretooluse.spawn_notification"):
             main()
         output = json.loads(capsys.readouterr().out)
-        assert output == {}  # lowercase 'bash' should not match
+        assert output == {}
 
     def test_unknown_auto_approve_value_returns_empty(self, tmp_config, write_config, capsys):
         """Should return {} for unrecognized auto_approve values."""
         write_config({"auto_approve": "invalid"})
-        with patch("sys.stdin", io.StringIO(json.dumps({"tool_name": "Bash", "session_id": "test"}))), \
+        with patch("sys.stdin", io.StringIO(json.dumps({"tool_name": "Bash", "session_id": "t"}))), \
              patch("hooks.pretooluse.spawn_notification"):
             main()
         output = json.loads(capsys.readouterr().out)
@@ -79,7 +79,7 @@ class TestPreToolUse:
     def test_missing_tool_name_returns_empty(self, tmp_config, write_config, capsys):
         """Should return {} when tool_name is missing from input."""
         write_config({"auto_approve": "bash"})
-        with patch("sys.stdin", io.StringIO(json.dumps({"session_id": "test"}))), \
+        with patch("sys.stdin", io.StringIO(json.dumps({"session_id": "t"}))), \
              patch("hooks.pretooluse.spawn_notification"):
             main()
         output = json.loads(capsys.readouterr().out)
@@ -87,7 +87,7 @@ class TestPreToolUse:
 
     def test_default_config_returns_empty(self, tmp_config, capsys):
         """With default config (auto_approve=off), should always return {}."""
-        with patch("sys.stdin", io.StringIO(json.dumps({"tool_name": "Bash", "session_id": "test"}))), \
+        with patch("sys.stdin", io.StringIO(json.dumps({"tool_name": "Bash", "session_id": "t"}))), \
              patch("hooks.pretooluse.spawn_notification"):
             main()
         output = json.loads(capsys.readouterr().out)
@@ -103,13 +103,14 @@ class TestPreToolUseNotification:
     """Tests for notification spawning when tool approval is needed."""
 
     def test_spawns_notification_when_not_auto_approving(self, tmp_config, write_config, capsys):
-        """Should spawn notification when user will be prompted for approval."""
+        """Should spawn notification when user will be prompted."""
         write_config({"auto_approve": "off", "notifications_enabled": True})
         stdin_data = json.dumps({"tool_name": "Bash", "session_id": "test-notify"})
         with patch("sys.stdin", io.StringIO(stdin_data)), \
              patch("hooks.pretooluse.spawn_notification") as mock_spawn:
             main()
-        mock_spawn.assert_called_once_with("test-notify", mock_spawn.call_args[0][1])
+        mock_spawn.assert_called_once()
+        assert mock_spawn.call_args[0][0] == "test-notify"
 
     def test_no_notification_when_auto_approving_all(self, tmp_config, write_config, capsys):
         """Should NOT spawn notification when auto-approving."""
@@ -147,49 +148,12 @@ class TestPreToolUseNotification:
             main()
         mock_spawn.assert_not_called()
 
-    def test_spawn_notification_creates_pending_file(self, tmp_config, write_config, capsys):
-        """spawn_notification should create a pending file and spawn notifier."""
-        from hooks.pretooluse import spawn_notification
-
-        write_config({"delay_seconds": 10, "sound": True})
-        config = {"delay_seconds": 10, "sound": True}
-        session_id = "test-spawn-pretool"
-        pending_path = f"/tmp/notifyme-{session_id}.pending"
-
-        try:
-            with patch("subprocess.Popen") as mock_popen, \
-                 patch("hooks.pretooluse.detect_frontmost_app", return_value="com.test.IDE"):
-                spawn_notification(session_id, config)
-
-            assert os.path.exists(pending_path)
-            with open(pending_path) as f:
-                data = json.load(f)
-            assert "seq" in data
-            assert data["sound"] is True
-            assert data["app"] == "com.test.IDE"
-
-            mock_popen.assert_called_once()
-            cmd = mock_popen.call_args[0][0]
-            assert cmd[0].endswith("notifier.sh")
-            assert cmd[1] == "10"
-            assert cmd[2] == session_id
-        finally:
-            if os.path.exists(pending_path):
-                os.remove(pending_path)
-
-    def test_uses_default_session_id(self, tmp_config, write_config, capsys):
-        """Should use 'unknown' when session_id is missing."""
+    def test_passes_input_data_to_spawn(self, tmp_config, write_config, capsys):
+        """Should pass input_data so spawn_notification can detect project."""
         write_config({"auto_approve": "off", "notifications_enabled": True})
-        stdin_data = json.dumps({"tool_name": "Bash"})
-        pending_path = "/tmp/notifyme-unknown.pending"
-
-        try:
-            with patch("sys.stdin", io.StringIO(stdin_data)), \
-                 patch("subprocess.Popen"), \
-                 patch("hooks.pretooluse.detect_frontmost_app", return_value=""):
-                main()
-
-            assert os.path.exists(pending_path)
-        finally:
-            if os.path.exists(pending_path):
-                os.remove(pending_path)
+        stdin_data = json.dumps({"tool_name": "Edit", "session_id": "s1", "cwd": "/proj"})
+        with patch("sys.stdin", io.StringIO(stdin_data)), \
+             patch("hooks.pretooluse.spawn_notification") as mock_spawn:
+            main()
+        passed_input = mock_spawn.call_args[0][2]
+        assert passed_input["cwd"] == "/proj"

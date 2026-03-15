@@ -2,7 +2,7 @@
 import json
 import os
 import subprocess
-import tempfile
+import time
 
 import pytest
 
@@ -36,15 +36,14 @@ class TestNotifierScript:
 
         try:
             with open(pending_path, "w") as f:
-                json.dump({"seq": 999, "sound": True}, f)
+                json.dump({"seq": 999, "sound": True, "app": "", "app_name": "", "project": ""}, f)
 
             result = subprocess.run(
-                [NOTIFIER_PATH, "0", session_id, "000"],  # seq mismatch
+                [NOTIFIER_PATH, "0", session_id, "000"],
                 capture_output=True,
                 timeout=5,
             )
             assert result.returncode == 0
-            # Pending file should NOT be cleaned up on seq mismatch
             assert os.path.exists(pending_path)
         finally:
             if os.path.exists(pending_path):
@@ -58,65 +57,56 @@ class TestNotifierScript:
 
         try:
             with open(pending_path, "w") as f:
-                json.dump({"seq": seq, "sound": False}, f)
+                json.dump({"seq": seq, "sound": False, "app": "", "app_name": "", "project": ""}, f)
 
             result = subprocess.run(
                 [NOTIFIER_PATH, "0", session_id, str(seq)],
                 capture_output=True,
                 timeout=10,
             )
-            # On macOS this should succeed (osascript available)
-            # On CI/headless it may fail but should still clean up
-            assert not os.path.exists(pending_path), "Pending file should be cleaned up"
+            assert not os.path.exists(pending_path)
         finally:
             if os.path.exists(pending_path):
                 os.remove(pending_path)
 
     def test_respects_delay(self):
         """Notifier should sleep for the delay period."""
-        import time
-
         session_id = "test-delay"
         pending_path = f"/tmp/notifyme-{session_id}.pending"
         seq = 100
 
         try:
             with open(pending_path, "w") as f:
-                json.dump({"seq": seq, "sound": False}, f)
+                json.dump({"seq": seq, "sound": False, "app": "", "app_name": "", "project": ""}, f)
 
             start = time.time()
-            result = subprocess.run(
+            subprocess.run(
                 [NOTIFIER_PATH, "1", session_id, str(seq)],
                 capture_output=True,
                 timeout=10,
             )
             elapsed = time.time() - start
-            assert elapsed >= 0.9, f"Should sleep at least ~1 second, took {elapsed:.2f}s"
+            assert elapsed >= 0.9
         finally:
             if os.path.exists(pending_path):
                 os.remove(pending_path)
 
     def test_cancel_during_delay(self):
         """Removing pending file during delay should prevent notification."""
-        import threading
-        import time
-
         session_id = "test-cancel-during-delay"
         pending_path = f"/tmp/notifyme-{session_id}.pending"
         seq = 200
 
         try:
             with open(pending_path, "w") as f:
-                json.dump({"seq": seq, "sound": False}, f)
+                json.dump({"seq": seq, "sound": False, "app": "", "app_name": "", "project": ""}, f)
 
-            # Start notifier with 2s delay
             proc = subprocess.Popen(
                 [NOTIFIER_PATH, "2", session_id, str(seq)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
 
-            # Remove pending file after 0.5s (simulating user response)
             time.sleep(0.5)
             if os.path.exists(pending_path):
                 os.remove(pending_path)
@@ -128,73 +118,123 @@ class TestNotifierScript:
                 os.remove(pending_path)
 
 
-class TestNotifierPlatformDetection:
-    """Tests for platform detection in notifier.sh."""
+class TestNotifierSessionContext:
+    """Tests for session-aware notifications (app name, project)."""
 
-    def test_detect_platform_function_exists(self):
-        """The script should contain a detect_platform function."""
+    def test_parses_all_fields_from_pending(self):
+        """Script should parse app, app_name, and project from pending file."""
         with open(NOTIFIER_PATH) as f:
             content = f.read()
-        assert "detect_platform()" in content
-
-    def test_handles_all_platforms(self):
-        """Script should handle macos, linux, wsl, and unknown platforms."""
-        with open(NOTIFIER_PATH) as f:
-            content = f.read()
-        for platform in ["macos", "linux", "wsl"]:
-            assert f"notify_{platform}" in content
-
-    def test_parses_app_bundle_from_pending(self):
-        """Script should read the app field from pending file."""
-        with open(NOTIFIER_PATH) as f:
-            content = f.read()
+        assert "FILE_APP_NAME" in content
+        assert "FILE_PROJECT" in content
         assert "FILE_APP" in content
-        assert "'app'" in content or '"app"' in content
 
-
-class TestNotifierClickToActivate:
-    """Tests for click-to-activate functionality."""
-
-    def test_macos_prefers_terminal_notifier(self):
-        """notify_macos should try terminal-notifier first."""
+    def test_notification_includes_app_name(self):
+        """Notification title should include app name when available."""
         with open(NOTIFIER_PATH) as f:
             content = f.read()
-        assert "terminal-notifier" in content
-        assert "-activate" in content
+        assert "build_notification_text" in content
+        assert "app_name" in content
 
-    def test_macos_falls_back_to_osascript(self):
-        """notify_macos should fall back to osascript + activate."""
+    def test_notification_includes_project(self):
+        """Notification message should include project name when available."""
         with open(NOTIFIER_PATH) as f:
             content = f.read()
-        assert "osascript" in content
-        assert "activate" in content
+        assert "project" in content.lower()
 
-    def test_notification_passes_app_bundle(self):
-        """Notification functions should receive app_bundle parameter."""
-        with open(NOTIFIER_PATH) as f:
-            content = f.read()
-        # Each notify function should accept app_bundle as $2
-        assert 'notify_macos "$FILE_SOUND" "$FILE_APP"' in content
-        assert 'notify_linux "$FILE_SOUND" "$FILE_APP"' in content
-        assert 'notify_wsl "$FILE_SOUND" "$FILE_APP"' in content
-
-    def test_seq_match_with_app_field(self):
-        """Should work correctly when pending file includes app field."""
-        session_id = "test-app-activate"
+    def test_with_app_and_project(self):
+        """Should show app name in title and project in message."""
+        session_id = "test-context-full"
         pending_path = f"/tmp/notifyme-{session_id}.pending"
-        seq = 555
+        seq = 300
 
         try:
             with open(pending_path, "w") as f:
-                json.dump({"seq": seq, "sound": False, "app": "com.apple.Terminal"}, f)
+                json.dump({
+                    "seq": seq, "sound": False,
+                    "app": "dev.warp.Warp-Stable", "app_name": "Warp",
+                    "project": "my-api"
+                }, f)
 
             result = subprocess.run(
                 [NOTIFIER_PATH, "0", session_id, str(seq)],
                 capture_output=True,
                 timeout=10,
             )
-            # Should process and clean up
             assert not os.path.exists(pending_path)
         finally:
             if os.path.exists(pending_path):
                 os.remove(pending_path)
+
+    def test_with_only_app_name(self):
+        """Should work with app name but no project."""
+        session_id = "test-context-app-only"
+        pending_path = f"/tmp/notifyme-{session_id}.pending"
+        seq = 301
+
+        try:
+            with open(pending_path, "w") as f:
+                json.dump({
+                    "seq": seq, "sound": False,
+                    "app": "com.apple.Terminal", "app_name": "Terminal",
+                    "project": ""
+                }, f)
+
+            result = subprocess.run(
+                [NOTIFIER_PATH, "0", session_id, str(seq)],
+                capture_output=True,
+                timeout=10,
+            )
+            assert not os.path.exists(pending_path)
+        finally:
+            if os.path.exists(pending_path):
+                os.remove(pending_path)
+
+    def test_with_no_context(self):
+        """Should still send notification with no app/project info."""
+        session_id = "test-context-none"
+        pending_path = f"/tmp/notifyme-{session_id}.pending"
+        seq = 302
+
+        try:
+            with open(pending_path, "w") as f:
+                json.dump({
+                    "seq": seq, "sound": False,
+                    "app": "", "app_name": "",
+                    "project": ""
+                }, f)
+
+            result = subprocess.run(
+                [NOTIFIER_PATH, "0", session_id, str(seq)],
+                capture_output=True,
+                timeout=10,
+            )
+            assert not os.path.exists(pending_path)
+        finally:
+            if os.path.exists(pending_path):
+                os.remove(pending_path)
+
+
+class TestNotifierPlatformDetection:
+    """Tests for platform detection in notifier.sh."""
+
+    def test_detect_platform_function_exists(self):
+        with open(NOTIFIER_PATH) as f:
+            content = f.read()
+        assert "detect_platform()" in content
+
+    def test_handles_all_platforms(self):
+        with open(NOTIFIER_PATH) as f:
+            content = f.read()
+        for platform in ["macos", "linux", "wsl"]:
+            assert f"notify_{platform}" in content
+
+    def test_native_activation_no_terminal_notifier(self):
+        """Should use osascript activate natively, not require terminal-notifier."""
+        with open(NOTIFIER_PATH) as f:
+            content = f.read()
+        # Should NOT prefer terminal-notifier anymore
+        assert "terminal-notifier" not in content
+        # Should use native osascript activate
+        assert "activate" in content
+        assert "osascript" in content
