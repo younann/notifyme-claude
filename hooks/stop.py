@@ -15,6 +15,25 @@ def get_seq():
     return int(time.time() * 1000)
 
 
+def detect_frontmost_app():
+    """Detect the bundle ID of the frontmost app (the terminal/IDE running Claude)."""
+    try:
+        result = subprocess.run(
+            [
+                "osascript", "-e",
+                'tell application "System Events" to get bundle identifier '
+                'of first process whose frontmost is true',
+            ],
+            capture_output=True, text=True, timeout=2,
+        )
+        bundle_id = result.stdout.strip()
+        if bundle_id:
+            return bundle_id
+    except Exception:
+        pass
+    return ""
+
+
 def main():
     try:
         input_data = json.load(sys.stdin)
@@ -32,10 +51,11 @@ def main():
     delay = config.get("delay_seconds", 30)
     sound = config.get("sound", True)
     seq = get_seq()
+    app_bundle = detect_frontmost_app()
 
     # Write pending file atomically
     pending_path = f"/tmp/notifyme-{session_id}.pending"
-    pending_data = json.dumps({"seq": seq, "sound": sound})
+    pending_data = json.dumps({"seq": seq, "sound": sound, "app": app_bundle})
     fd, tmp_path = tempfile.mkstemp(dir="/tmp", suffix=".pending.tmp")
     with os.fdopen(fd, "w") as f:
         f.write(pending_data)

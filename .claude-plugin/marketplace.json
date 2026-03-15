@@ -1,0 +1,25 @@
+{
+  "name": "notifyme-claude",
+  "id": "notifyme-claude",
+  "owner": {
+    "name": "Younan Nwesre"
+  },
+  "metadata": {
+    "description": "Desktop notifications when Claude is waiting for input + configurable auto-approve for tool permissions",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "notifyme",
+      "source": "./",
+      "description": "Desktop notifications when Claude is waiting for input + configurable auto-approve for tool permissions",
+      "version": "1.0.0",
+      "author": {
+        "name": "Younan Nwesre"
+      },
+      "keywords": ["notifications", "desktop", "auto-approve", "macos", "linux", "wsl", "cross-platform"],
+      "category": "productivity",
+      "strict": false
+    }
+  ]
+}
