@@ -63,14 +63,15 @@ notify_macos() {
   local esc_message="${message//\"/\\\"}"
 
   # Send notification FROM the terminal/IDE app so clicking it activates that app
+  # Also activate the app immediately so the user is brought to the session
   if [ -n "$app_bundle" ]; then
-    if [ "$sound" = "true" ]; then
-      osascript -e "tell application id \"${app_bundle}\" to display notification \"${esc_message}\" with title \"${esc_title}\" sound name \"Glass\""
-    else
-      osascript -e "tell application id \"${app_bundle}\" to display notification \"${esc_message}\" with title \"${esc_title}\""
-    fi
+    osascript -e "
+      tell application id \"${app_bundle}\"
+        activate
+        display notification \"${esc_message}\" with title \"${esc_title}\"$([ "$sound" = "true" ] && echo " sound name \"Glass\"")
+      end tell
+    "
   else
-    # Fallback: no app detected, send generic notification
     if [ "$sound" = "true" ]; then
       osascript -e "display notification \"${esc_message}\" with title \"${esc_title}\" sound name \"Glass\""
     else
