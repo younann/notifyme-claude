@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Desktop notifications when Claude is waiting for input + configurable auto-approve for tool permissions",
-    "version": "1.0.1"
+    "version": "1.0.2"
   },
   "plugins": [
     {
       "name": "notifyme",
       "source": "./",
       "description": "Desktop notifications when Claude is waiting for input + configurable auto-approve for tool permissions",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": {
         "name": "Younan Nwesre"
       },
