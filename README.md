@@ -1,29 +1,45 @@
 # NotifyMe — Claude Code Plugin
 
-**Never miss when Claude is done.** Get desktop notifications when Claude Code finishes a task and is waiting for your input — plus configurable auto-approve to skip permission prompts. Clicking the notification brings your terminal/IDE back to focus.
+**Never miss when Claude is done.** Get desktop notifications when Claude Code finishes a task or is waiting for tool approval — with session-aware context that tells you exactly which app and project needs attention. No extra installs needed. Your terminal/IDE automatically comes to focus.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20WSL-brightgreen.svg)](#platform-support)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-Plugin-purple.svg)](https://claude.ai)
-[![Tests](https://img.shields.io/badge/Tests-65%20passed-success.svg)](#testing)
+[![Tests](https://img.shields.io/badge/Tests-85%20passed-success.svg)](#testing)
 
 ---
 
 ## The Problem
 
-You kick off a long task in Claude Code, switch to another window, and... forget about it. Minutes (or hours) later, you come back to find Claude has been patiently waiting for your input the whole time.
+You kick off a long task in Claude Code, switch to another window, and... forget about it. Minutes (or hours) later, you come back to find Claude has been patiently waiting for your input the whole time. Even worse — Claude might be waiting for you to approve a Bash command, and you don't even know it.
 
-**NotifyMe fixes this.** It watches for when Claude stops and waits, then pings you with a desktop notification after a configurable delay — so you only get notified when you're actually away, not during active back-and-forth. Clicking the notification brings your terminal or IDE straight back to focus.
+**NotifyMe fixes this.** It notifies you when Claude is:
+- **Done processing** and waiting for your next message
+- **Waiting for tool approval** (e.g., "Allow Bash command?")
+
+Notifications are session-aware — if you have 3 Claude sessions open across Warp and Cursor, you'll know exactly which one needs attention.
 
 ---
 
 ## Desktop Notification
 
-When Claude finishes and you're away, you'll see a native desktop notification:
+When Claude finishes and you're away, you'll see a native desktop notification that identifies the session:
 
 <p align="center">
   <img src="assets/notification.png" alt="NotifyMe desktop notification" width="500">
 </p>
+
+### Session-Aware Notifications
+
+Running multiple Claude sessions? Each notification tells you exactly where to look:
+
+| Session | Notification Title | Message |
+|---|---|---|
+| Warp — working on my-api | `Claude is waiting — Warp` | `Project: my-api` |
+| Cursor — editing frontend | `Claude is waiting — Cursor` | `Project: frontend` |
+| Terminal — running scripts | `Claude is waiting — Terminal` | `Project: scripts` |
+
+Your terminal/IDE **automatically comes to focus** when the notification fires — no clicking required, no extra tools to install.
 
 ---
 
@@ -37,13 +53,23 @@ NotifyMe uses three Claude Code hooks that coordinate through the filesystem:
 
 ### Detailed Flow
 
-1. **Claude finishes its turn** — `Stop` hook fires, detects the frontmost app (your terminal/IDE), writes a pending file to `/tmp/notifyme-<session>.pending`, and spawns `notifier.sh` in the background
-2. **notifier.sh** sleeps for the configured delay (default: 30s)
-3. **Meanwhile, if you respond** — `UserPromptSubmit` hook deletes the pending file, cancelling the notification
-4. **After delay, notifier.sh wakes up:**
-   - Pending file exists? — Send notification and bring your app to focus
+1. **Claude finishes its turn** — `Stop` hook fires, detects the frontmost app (name + bundle ID) and project directory, writes a pending file to `/tmp/notifyme-<session>.pending`, and spawns `notifier.sh` in the background
+2. **Claude needs tool approval** — `PreToolUse` hook fires when a tool isn't auto-approved, also spawns a notification timer (so you get notified for approval prompts too)
+3. **notifier.sh** sleeps for the configured delay (default: 30s)
+4. **Meanwhile, if you respond** — `UserPromptSubmit` hook deletes the pending file, cancelling the notification
+5. **After delay, notifier.sh wakes up:**
+   - Pending file exists? — Send notification with app/project context, bring your app to focus
    - Pending file gone? — You already responded, exit silently
-5. **Race condition protection:** Each pending file contains a sequence number. Only the latest notifier can fire — older ones detect the mismatch and exit
+6. **Race condition protection:** Each pending file contains a sequence number. Only the latest notifier can fire — older ones detect the mismatch and exit
+
+### What Triggers Notifications
+
+| Event | Notifies? | Why |
+|---|---|---|
+| Claude finishes processing | Yes | Stop hook fires |
+| Claude waits for tool approval | Yes | PreToolUse hook fires when not auto-approved |
+| You're actively typing | No | UserPromptSubmit cancels the timer |
+| Auto-approved tool runs | No | No approval needed, no notification |
 
 ### Auto-Approve Flow
 
@@ -51,13 +77,14 @@ When a tool is invoked (Bash, Edit, Write, etc.):
 
 1. **PreToolUse hook** fires before the tool executes
 2. Reads your `auto_approve` setting
-3. Returns `allow` for matching tools, or defers to normal permission flow
+3. If auto-approved → tool runs, no notification
+4. If not auto-approved → starts notification timer, defers to normal permission flow
 
 ---
 
 ## Platform Support
 
-NotifyMe works across all major platforms with click-to-activate support:
+NotifyMe works across all major platforms with native focus-activation — zero extra installs:
 
 <p align="center">
   <img src="assets/platforms.png" alt="Supported platforms — macOS, Linux, WSL" width="600">
@@ -65,19 +92,13 @@ NotifyMe works across all major platforms with click-to-activate support:
 
 ### macOS (Recommended)
 
-Works out of the box with `osascript`. For **click-to-activate** (clicking the notification opens your terminal/IDE), install `terminal-notifier`:
-
-```bash
-brew install terminal-notifier
-```
-
-Without it, NotifyMe will auto-focus your terminal when the notification fires.
+Works out of the box. Uses native `osascript` for notifications and `tell application to activate` to bring your terminal/IDE to focus. **No extra installs needed.**
 
 **Notification Center:** Go to System Settings → Notifications → Terminal (or your terminal app) → ensure notifications are allowed.
 
 ### Linux
 
-Uses `notify-send` from libnotify for visual notifications and `paplay`/`aplay` for sound. Supports click-to-activate via `wmctrl` or `xdotool`.
+Uses `notify-send` from libnotify for visual notifications and `paplay`/`aplay` for sound. Window focus via `wmctrl` or `xdotool`.
 
 ```bash
 # Debian/Ubuntu
@@ -216,11 +237,32 @@ Claude: [stops, waiting for input]
          ↓
   [30 seconds pass, you're in another app]
          ↓
-  🔔 Desktop notification: "Claude is waiting"
-  → Click notification → Terminal comes to focus
+  🔔 "Claude is waiting — Warp"  •  "Project: my-api"
+  → Warp automatically comes to focus
 ```
 
-### Scenario 2: Active Conversation
+### Scenario 2: Tool Approval While Away
+
+```
+You: "Run the migration and deploy"
+Claude: [runs migration — auto-approved ✓]
+Claude: [wants to run deploy script — needs approval]
+         ↓
+  [You switched to Slack, 30 seconds pass]
+         ↓
+  🔔 "Claude is waiting — Cursor"  •  "Project: backend"
+  → Cursor comes to focus, you see the approval prompt
+```
+
+### Scenario 3: Multiple Sessions
+
+```
+Session 1 (Warp):   Working on "my-api"     → 🔔 "Claude is waiting — Warp"    Project: my-api
+Session 2 (Warp):   Working on "frontend"   → 🔔 "Claude is waiting — Warp"    Project: frontend
+Session 3 (Cursor): Working on "mobile-app" → 🔔 "Claude is waiting — Cursor"  Project: mobile-app
+```
+
+### Scenario 4: Active Conversation
 
 ```
 You: "What does this function do?"
@@ -233,22 +275,22 @@ You: "Can you add error handling?"
   [Timer cancelled — no notification]
 ```
 
-### Scenario 3: Auto-Approve Bash
+### Scenario 5: Auto-Approve Bash
 
 ```
 You: /notifyme:auto-approve bash
      "Run the test suite and fix any failures"
          ↓
-Claude: [runs pytest — auto-approved ✓]
-Claude: [edits test file — prompts for permission as usual]
-Claude: [runs pytest again — auto-approved ✓]
+Claude: [runs pytest — auto-approved ✓, no notification]
+Claude: [edits test file — needs approval → notification timer starts]
+Claude: [runs pytest again — auto-approved ✓, no notification]
 ```
 
 ---
 
 ## Testing
 
-NotifyMe includes a comprehensive test suite with **65 tests** covering all components:
+NotifyMe includes a comprehensive test suite with **85 tests** covering all components:
 
 ```bash
 python3 -m pytest tests/ -v
@@ -257,40 +299,51 @@ python3 -m pytest tests/ -v
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
 | `test_config.py` | 13 | Config load/save, defaults, merge, atomic writes, error handling |
-| `test_stop.py` | 14 | Stop hook, pending file creation, notifier spawning, app detection |
-| `test_pretooluse.py` | 10 | Auto-approve modes, case sensitivity, response structure |
+| `test_notify.py` | 22 | App detection (bundle ID + name), project detection, spawn logic |
+| `test_stop.py` | 7 | Stop hook delegation, disabled state, input forwarding |
+| `test_pretooluse.py` | 16 | Auto-approve modes, notification on approval prompts |
 | `test_userpromptsubmit.py` | 6 | Pending file deletion, integration with stop hook |
-| `test_notifier.py` | 13 | Shell script, delay, seq matching, cancel, click-to-activate |
+| `test_notifier.py` | 15 | Shell script, delay, seq matching, session context, platform detection |
 | `test_hooks_json.py` | 6 | Hook registration structure validation |
 
 ---
 
-## Project Structure
+## Architecture
 
 ```
 notifyme/
 ├── .claude-plugin/
 │   └── plugin.json              # Plugin metadata
 ├── hooks/
-│   ├── hooks.json               # Hook registrations
-│   ├── stop.py                  # Stop hook — detects app, spawns delayed notifier
-│   ├── pretooluse.py            # PreToolUse hook — auto-approve logic
-│   ├── userpromptsubmit.py      # UserPromptSubmit hook — cancel notifications
-│   └── notifier.sh              # Background notification + click-to-activate
+│   ├── hooks.json               # Hook registrations (Stop, PreToolUse, UserPromptSubmit)
+│   ├── stop.py                  # Stop hook — triggers notification on Claude idle
+│   ├── pretooluse.py            # PreToolUse hook — auto-approve + notify on approval prompts
+│   ├── userpromptsubmit.py      # UserPromptSubmit hook — cancel pending notifications
+│   └── notifier.sh              # Background notifier — session-aware, native focus activation
 ├── core/
 │   ├── __init__.py
-│   └── config.py                # Config load/save with atomic writes
+│   ├── config.py                # Config load/save with atomic writes
+│   └── notify.py                # Shared: app detection, project detection, spawn logic
 ├── commands/
 │   ├── notifyme.md              # /notifyme — show status
 │   ├── on.md                    # /notifyme:on
 │   ├── off.md                   # /notifyme:off
 │   ├── delay.md                 # /notifyme:delay <seconds>
 │   └── auto-approve.md          # /notifyme:auto-approve <mode>
-├── tests/                       # 65 tests covering all components
-├── assets/                      # Screenshots and mockups
+├── tests/                       # 85 tests covering all components
+├── assets/                      # Screenshots
 ├── README.md
 └── LICENSE
 ```
+
+### Key Design Decisions
+
+- **Session-aware context:** Each notification includes the app name (Warp, Cursor, Terminal, etc.) and project directory — so you know exactly which session needs attention
+- **Native focus activation:** Uses `osascript tell application to activate` on macOS — no extra dependencies like `terminal-notifier` required
+- **Tool approval notifications:** PreToolUse hook also triggers notifications when auto-approve is off, so you're notified when Claude is waiting for permission, not just when it's done
+- **Shared notify module:** `core/notify.py` centralizes app detection, project detection, and notification spawning — used by both `stop.py` and `pretooluse.py`
+- **Atomic file operations:** Config and pending files use temp-file-then-rename pattern to prevent corruption
+- **Sequence numbers:** Millisecond-precision seq prevents race conditions when multiple notifiers are spawned
 
 ---
 
@@ -303,11 +356,17 @@ notifyme/
 3. **Linux:** Verify `notify-send` is installed: `which notify-send`
 4. **WSL:** Verify `powershell.exe` is accessible from WSL
 
-### Notification doesn't focus my app?
+### Not getting notified for tool approvals?
 
-1. **macOS:** Install `terminal-notifier` (`brew install terminal-notifier`) for click-to-activate
-2. **Linux:** Install `wmctrl` or `xdotool` for window activation
-3. Without these tools, the fallback will still send the notification but may not switch windows
+This was fixed in v1.1. The PreToolUse hook now spawns a notification when it doesn't auto-approve a tool — so you'll get notified when Claude is waiting for Bash/Edit/Write permission too.
+
+### Notification doesn't show my project name?
+
+The project name is detected from the working directory. If it shows empty, your terminal may not be setting `PWD`. You can verify by running `echo $PWD` in your terminal.
+
+### Wrong app gets focused?
+
+NotifyMe detects the frontmost app when the hook fires. If you switch apps very quickly after Claude stops, it may capture the wrong window. The delay gives you time to respond before the app switch happens.
 
 ### Auto-approve not working?
 
