@@ -1,0 +1,10 @@
+{
+  "name": "notifyme",
+  "description": "Desktop notifications when Claude is waiting for input + configurable auto-approve for tool permissions",
+  "version": "1.0.0",
+  "author": {
+    "name": "Younan Nwesre"
+  },
+  "license": "MIT",
+  "keywords": ["notifications", "desktop", "auto-approve", "macos", "linux", "wsl", "cross-platform"]
+}
