@@ -9,7 +9,11 @@ from core.config import load_config
 from core.notify import spawn_notification
 
 ALLOW_RESPONSE = {
-    "hookSpecificOutput": {"permissionDecision": "allow"}
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "allow",
+        "permissionDecisionReason": "Auto-approved by NotifyMe plugin",
+    }
 }
 
 

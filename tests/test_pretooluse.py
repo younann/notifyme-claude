@@ -96,7 +96,10 @@ class TestPreToolUse:
     def test_allow_response_structure(self):
         """ALLOW_RESPONSE should have the correct Claude hook format."""
         assert "hookSpecificOutput" in ALLOW_RESPONSE
-        assert ALLOW_RESPONSE["hookSpecificOutput"]["permissionDecision"] == "allow"
+        hso = ALLOW_RESPONSE["hookSpecificOutput"]
+        assert hso["hookEventName"] == "PreToolUse"
+        assert hso["permissionDecision"] == "allow"
+        assert "permissionDecisionReason" in hso
 
 
 class TestPreToolUseNotification:
