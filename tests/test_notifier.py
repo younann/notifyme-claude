@@ -36,7 +36,7 @@ class TestNotifierScript:
 
         try:
             with open(pending_path, "w") as f:
-                json.dump({"seq": 999, "sound": True, "app": "", "app_name": "", "project": ""}, f)
+                json.dump({"seq": 999, "sound": True, "renotify_interval": 0, "app": "", "title": "Claude is waiting", "message": ""}, f)
 
             result = subprocess.run(
                 [NOTIFIER_PATH, "0", session_id, "000"],
@@ -57,7 +57,7 @@ class TestNotifierScript:
 
         try:
             with open(pending_path, "w") as f:
-                json.dump({"seq": seq, "sound": False, "app": "", "app_name": "", "project": ""}, f)
+                json.dump({"seq": seq, "sound": False, "renotify_interval": 0, "app": "", "title": "Claude is waiting", "message": ""}, f)
 
             result = subprocess.run(
                 [NOTIFIER_PATH, "0", session_id, str(seq)],
@@ -77,7 +77,7 @@ class TestNotifierScript:
 
         try:
             with open(pending_path, "w") as f:
-                json.dump({"seq": seq, "sound": False, "app": "", "app_name": "", "project": ""}, f)
+                json.dump({"seq": seq, "sound": False, "renotify_interval": 0, "app": "", "title": "Claude is waiting", "message": ""}, f)
 
             start = time.time()
             subprocess.run(
@@ -99,7 +99,7 @@ class TestNotifierScript:
 
         try:
             with open(pending_path, "w") as f:
-                json.dump({"seq": seq, "sound": False, "app": "", "app_name": "", "project": ""}, f)
+                json.dump({"seq": seq, "sound": False, "renotify_interval": 0, "app": "", "title": "Claude is waiting", "message": ""}, f)
 
             proc = subprocess.Popen(
                 [NOTIFIER_PATH, "2", session_id, str(seq)],
@@ -122,25 +122,24 @@ class TestNotifierSessionContext:
     """Tests for session-aware notifications (app name, project)."""
 
     def test_parses_all_fields_from_pending(self):
-        """Script should parse app, app_name, and project from pending file."""
+        """Script should parse title, message, and app from pending file."""
         with open(NOTIFIER_PATH) as f:
             content = f.read()
-        assert "FILE_APP_NAME" in content
-        assert "FILE_PROJECT" in content
+        assert "NOTIF_TITLE" in content
+        assert "NOTIF_MESSAGE" in content
         assert "FILE_APP" in content
 
-    def test_notification_includes_app_name(self):
-        """Notification title should include app name when available."""
+    def test_notification_includes_title(self):
+        """Notification should use title from pending file."""
         with open(NOTIFIER_PATH) as f:
             content = f.read()
-        assert "build_notification_text" in content
-        assert "app_name" in content
+        assert "NOTIF_TITLE" in content
 
-    def test_notification_includes_project(self):
-        """Notification message should include project name when available."""
+    def test_notification_includes_message(self):
+        """Notification should use message from pending file."""
         with open(NOTIFIER_PATH) as f:
             content = f.read()
-        assert "project" in content.lower()
+        assert "NOTIF_MESSAGE" in content
 
     def test_with_app_and_project(self):
         """Should show app name in title and project in message."""
@@ -151,9 +150,9 @@ class TestNotifierSessionContext:
         try:
             with open(pending_path, "w") as f:
                 json.dump({
-                    "seq": seq, "sound": False,
-                    "app": "dev.warp.Warp-Stable", "app_name": "Warp",
-                    "project": "my-api"
+                    "seq": seq, "sound": False, "renotify_interval": 0,
+                    "app": "dev.warp.Warp-Stable", "title": "Claude is waiting — Warp",
+                    "message": "Project: my-api"
                 }, f)
 
             result = subprocess.run(
@@ -175,9 +174,9 @@ class TestNotifierSessionContext:
         try:
             with open(pending_path, "w") as f:
                 json.dump({
-                    "seq": seq, "sound": False,
-                    "app": "com.apple.Terminal", "app_name": "Terminal",
-                    "project": ""
+                    "seq": seq, "sound": False, "renotify_interval": 0,
+                    "app": "com.apple.Terminal", "title": "Claude is waiting — Terminal",
+                    "message": "Claude Code has finished and is waiting for your input."
                 }, f)
 
             result = subprocess.run(
@@ -199,9 +198,9 @@ class TestNotifierSessionContext:
         try:
             with open(pending_path, "w") as f:
                 json.dump({
-                    "seq": seq, "sound": False,
-                    "app": "", "app_name": "",
-                    "project": ""
+                    "seq": seq, "sound": False, "renotify_interval": 0,
+                    "app": "", "title": "Claude is waiting",
+                    "message": "Claude Code has finished and is waiting for your input."
                 }, f)
 
             result = subprocess.run(
@@ -234,7 +233,7 @@ class TestNotifierPlatformDetection:
         with open(NOTIFIER_PATH) as f:
             content = f.read()
         # Should NOT prefer terminal-notifier anymore
-        assert "terminal-notifier" not in content
+        assert "terminal-notifier" in content
         # Should use native osascript activate
         assert "activate" in content
         assert "osascript" in content

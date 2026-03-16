@@ -22,33 +22,6 @@ detect_platform() {
   fi
 }
 
-# --- Build notification text from session context ---
-build_notification_text() {
-  local app_name="$1"
-  local project="$2"
-
-  local title="Claude is waiting"
-  local message=""
-
-  # Build a contextual message that identifies the session
-  if [ -n "$app_name" ] && [ -n "$project" ]; then
-    title="Claude is waiting — ${app_name}"
-    message="Project: ${project}"
-  elif [ -n "$app_name" ]; then
-    title="Claude is waiting — ${app_name}"
-    message="Claude Code has finished and is waiting for your input."
-  elif [ -n "$project" ]; then
-    title="Claude is waiting"
-    message="Project: ${project}"
-  else
-    message="Claude Code has finished and is waiting for your input."
-  fi
-
-  # Return via global vars (bash can't return two values)
-  NOTIF_TITLE="$title"
-  NOTIF_MESSAGE="$message"
-}
-
 # --- Notification functions ---
 notify_macos() {
   local sound="$1"
@@ -62,20 +35,27 @@ notify_macos() {
   local esc_title="${title//\"/\\\"}"
   local esc_message="${message//\"/\\\"}"
 
-  # Send notification FROM the terminal/IDE app so clicking it activates that app
-  # Also activate the app immediately so the user is brought to the session
-  if [ -n "$app_bundle" ]; then
-    osascript -e "
-      tell application id \"${app_bundle}\"
-        activate
-        display notification \"${esc_message}\" with title \"${esc_title}\"$([ "$sound" = "true" ] && echo " sound name \"Glass\"")
-      end tell
-    "
+  # Send notification via terminal-notifier if available (supports click-to-activate)
+  # Falls back to osascript (click opens Script Editor — an OS limitation)
+  if command -v terminal-notifier &>/dev/null; then
+    local tn_args=(-title "$title" -message "$message" -group "notifyme-${SESSION_ID}")
+    if [ -n "$app_bundle" ]; then
+      tn_args+=(-sender "$app_bundle" -activate "$app_bundle")
+    fi
+    if [ "$sound" = "true" ]; then
+      tn_args+=(-sound Glass)
+    fi
+    terminal-notifier "${tn_args[@]}"
   else
+    # Show notification first
     if [ "$sound" = "true" ]; then
       osascript -e "display notification \"${esc_message}\" with title \"${esc_title}\" sound name \"Glass\""
     else
       osascript -e "display notification \"${esc_message}\" with title \"${esc_title}\""
+    fi
+    # Then bring terminal/IDE to focus
+    if [ -n "$app_bundle" ]; then
+      osascript -e "tell application id \"${app_bundle}\" to activate"
     fi
   fi
 }
@@ -146,37 +126,54 @@ if [ -z "$PENDING_CONTENT" ]; then
   exit 0
 fi
 
-# Parse JSON with python3 (available since hooks use it)
-read -r FILE_SEQ FILE_SOUND FILE_APP FILE_APP_NAME FILE_PROJECT < <(
-  echo "$PENDING_CONTENT" | python3 -c "
-import sys, json
+# Parse JSON fields (uses eval+shlex.quote for space-safe values)
+eval "$(echo "$PENDING_CONTENT" | python3 -c "
+import sys, json, shlex
 d = json.load(sys.stdin)
-print(
-    d.get('seq', ''),
-    str(d.get('sound', True)).lower(),
-    d.get('app', ''),
-    d.get('app_name', ''),
-    d.get('project', '')
-)
-" 2>/dev/null
-)
+print(f'FILE_SEQ={shlex.quote(str(d.get(\"seq\", \"\")))}')
+print(f'FILE_SOUND={shlex.quote(str(d.get(\"sound\", True)).lower())}')
+print(f'FILE_RENOTIFY={shlex.quote(str(d.get(\"renotify_interval\", 0)))}')
+print(f'FILE_APP={shlex.quote(d.get(\"app\", \"\"))}')
+print(f'NOTIF_TITLE={shlex.quote(d.get(\"title\", \"Claude is waiting\"))}')
+print(f'NOTIF_MESSAGE={shlex.quote(d.get(\"message\", \"\"))}')
+" 2>/dev/null)"
 
 # Only the latest notifier should fire
 if [ "$FILE_SEQ" != "$SEQ" ]; then
   exit 0
 fi
 
-# Build contextual notification text
-build_notification_text "$FILE_APP_NAME" "$FILE_PROJECT"
-
 # Send notification with app activation
-PLATFORM=$(detect_platform)
-case "$PLATFORM" in
-  macos) notify_macos "$FILE_SOUND" "$FILE_APP" "$NOTIF_TITLE" "$NOTIF_MESSAGE" ;;
-  linux) notify_linux "$FILE_SOUND" "$FILE_APP" "$NOTIF_TITLE" "$NOTIF_MESSAGE" ;;
-  wsl)   notify_wsl "$FILE_SOUND" "$FILE_APP" "$NOTIF_TITLE" "$NOTIF_MESSAGE" ;;
-  *)     exit 0 ;;
-esac
+send_notification() {
+  PLATFORM=$(detect_platform)
+  case "$PLATFORM" in
+    macos) notify_macos "$FILE_SOUND" "$FILE_APP" "$NOTIF_TITLE" "$NOTIF_MESSAGE" ;;
+    linux) notify_linux "$FILE_SOUND" "$FILE_APP" "$NOTIF_TITLE" "$NOTIF_MESSAGE" ;;
+    wsl)   notify_wsl "$FILE_SOUND" "$FILE_APP" "$NOTIF_TITLE" "$NOTIF_MESSAGE" ;;
+    *)     exit 0 ;;
+  esac
+}
 
-# Clean up
+# First notification
+send_notification
+
+# Re-notify loop: keep reminding until user responds (deletes pending file)
+if [ -n "$FILE_RENOTIFY" ] && [ "$FILE_RENOTIFY" -gt 0 ] 2>/dev/null; then
+  while true; do
+    sleep "$FILE_RENOTIFY"
+    # User responded — pending file is gone
+    if [ ! -f "$PENDING_FILE" ]; then
+      exit 0
+    fi
+    # Another notifier superseded us — seq changed
+    NEW_SEQ=$(echo "$(cat "$PENDING_FILE" 2>/dev/null)" | python3 -c "import sys,json; print(json.load(sys.stdin).get('seq',''))" 2>/dev/null)
+    if [ "$NEW_SEQ" != "$SEQ" ]; then
+      exit 0
+    fi
+    NOTIF_TITLE="${NOTIF_TITLE/Claude is waiting/Claude is still waiting}"
+    send_notification
+  done
+fi
+
+# Clean up (only reached if renotify is disabled)
 rm -f "$PENDING_FILE"
