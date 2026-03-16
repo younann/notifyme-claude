@@ -7,8 +7,10 @@ CONFIG_PATH = os.path.expanduser("~/.claude/notifyme.json")
 DEFAULTS = {
     "notifications_enabled": True,
     "delay_seconds": 30,
+    "renotify_interval": 60,
     "auto_approve": "off",
     "sound": True,
+    "channels": ["desktop"],
 }
 
 
