@@ -1,10 +1,12 @@
-"""Shared notification logic — detect session context and spawn notifier."""
+"""Shared notification logic — detect session context and dispatch to channels."""
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import time
+
+from core.channels import notify_all
 
 
 def get_seq():
@@ -17,7 +19,6 @@ def detect_frontmost_app():
     Returns (bundle_id, app_name) tuple. Falls back to ("", "") on failure.
     """
     try:
-        # Get both bundle ID and display name in one osascript call
         result = subprocess.run(
             [
                 "osascript", "-e",
@@ -43,58 +44,49 @@ def detect_project_name(input_data):
 
     Tries multiple sources: hook input cwd, environment variables, fallback.
     """
-    # Try cwd from hook input data
     cwd = input_data.get("cwd", "")
-
-    # Try environment variables that Claude Code might set
     if not cwd:
         cwd = os.environ.get("CLAUDE_PROJECT_DIR", "")
     if not cwd:
         cwd = os.environ.get("PWD", "")
-
     if cwd:
         return os.path.basename(cwd)
     return ""
 
 
-def spawn_notification(session_id, config, input_data=None):
-    """Write pending file and spawn background notifier.
+def build_notification_text(app_name, project):
+    """Build title and message strings from session context."""
+    if app_name and project:
+        title = f"Claude is waiting \u2014 {app_name}"
+        message = f"Project: {project}"
+    elif app_name:
+        title = f"Claude is waiting \u2014 {app_name}"
+        message = "Claude Code has finished and is waiting for your input."
+    elif project:
+        title = "Claude is waiting"
+        message = f"Project: {project}"
+    else:
+        title = "Claude is waiting"
+        message = "Claude Code has finished and is waiting for your input."
+    return title, message
 
-    The pending file contains session context (app, project) so the
-    notification can identify which Claude session is waiting.
-    """
+
+def spawn_notification(session_id, config, input_data=None):
+    """Detect context, build notification text, and dispatch to all channels."""
     if input_data is None:
         input_data = {}
 
-    delay = config.get("delay_seconds", 30)
-    sound = config.get("sound", True)
-    seq = get_seq()
     app_bundle, app_name = detect_frontmost_app()
     project = detect_project_name(input_data)
+    title, message = build_notification_text(app_name, project)
 
-    # Write pending file atomically
-    pending_path = f"/tmp/notifyme-{session_id}.pending"
-    pending_data = json.dumps({
-        "seq": seq,
-        "sound": sound,
-        "app": app_bundle,
-        "app_name": app_name,
-        "project": project,
-    })
-    fd, tmp_path = tempfile.mkstemp(dir="/tmp", suffix=".pending.tmp")
-    with os.fdopen(fd, "w") as f:
-        f.write(pending_data)
-    os.replace(tmp_path, pending_path)
+    context = {
+        "session_id": session_id,
+        "app_bundle": app_bundle,
+        "sound": config.get("sound", True),
+        "delay": config.get("delay_seconds", 30),
+        "renotify_interval": config.get("renotify_interval", 60),
+        "seq": get_seq(),
+    }
 
-    # Spawn notifier.sh as detached background process
-    hooks_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hooks"
-    )
-    notifier_path = os.path.join(hooks_dir, "notifier.sh")
-
-    subprocess.Popen(
-        [notifier_path, str(delay), session_id, str(seq)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    notify_all(title, message, context, config)

@@ -12,6 +12,7 @@ from core.notify import (
     get_seq,
     detect_frontmost_app,
     detect_project_name,
+    build_notification_text,
     spawn_notification,
 )
 
@@ -127,104 +128,88 @@ class TestDetectProjectName:
         assert result == "project-a"
 
 
+class TestBuildNotificationText:
+    """Tests for build_notification_text()."""
+
+    def test_app_and_project(self):
+        from core.notify import build_notification_text
+        title, msg = build_notification_text("Warp", "my-api")
+        assert "Warp" in title
+        assert "my-api" in msg
+
+    def test_app_only(self):
+        from core.notify import build_notification_text
+        title, msg = build_notification_text("Terminal", "")
+        assert "Terminal" in title
+        assert "waiting for your input" in msg
+
+    def test_project_only(self):
+        from core.notify import build_notification_text
+        title, msg = build_notification_text("", "backend")
+        assert title == "Claude is waiting"
+        assert "backend" in msg
+
+    def test_no_context(self):
+        from core.notify import build_notification_text
+        title, msg = build_notification_text("", "")
+        assert title == "Claude is waiting"
+        assert "waiting for your input" in msg
+
+
 class TestSpawnNotification:
     """Tests for the spawn_notification function."""
 
-    def test_creates_pending_file(self):
-        session_id = "test-spawn-shared"
-        pending_path = f"/tmp/notifyme-{session_id}.pending"
-        config = {"delay_seconds": 10, "sound": True}
+    def test_calls_notify_all_with_title_and_message(self):
+        with patch("core.notify.notify_all") as mock_notify, \
+             patch("core.notify.detect_frontmost_app", return_value=("com.test.App", "TestApp")):
+            spawn_notification("sess-1", {"delay_seconds": 10, "sound": True}, {"cwd": "/my/project"})
 
-        try:
-            with patch("subprocess.Popen") as mock_popen, \
-                 patch("core.notify.detect_frontmost_app", return_value=("com.test.App", "TestApp")):
-                spawn_notification(session_id, config, {"cwd": "/my/project"})
+        mock_notify.assert_called_once()
+        title, message, context, config = mock_notify.call_args[0]
+        assert "TestApp" in title
+        assert "project" in message
+        assert context["session_id"] == "sess-1"
+        assert context["app_bundle"] == "com.test.App"
+        assert context["sound"] is True
+        assert context["delay"] == 10
 
-            assert os.path.exists(pending_path)
-            with open(pending_path) as f:
-                data = json.load(f)
-            assert "seq" in data
-            assert data["sound"] is True
-            assert data["app"] == "com.test.App"
-            assert data["app_name"] == "TestApp"
-            assert data["project"] == "project"
-        finally:
-            if os.path.exists(pending_path):
-                os.remove(pending_path)
+    def test_context_contains_all_fields(self):
+        with patch("core.notify.notify_all") as mock_notify, \
+             patch("core.notify.detect_frontmost_app", return_value=("", "")):
+            spawn_notification("sess-2", {"delay_seconds": 5, "sound": False, "renotify_interval": 90})
 
-    def test_pending_file_contains_all_fields(self):
-        session_id = "test-all-fields"
-        pending_path = f"/tmp/notifyme-{session_id}.pending"
-        config = {"delay_seconds": 5, "sound": False}
-
-        try:
-            with patch("subprocess.Popen"), \
-                 patch("core.notify.detect_frontmost_app", return_value=("dev.warp.Warp", "Warp")):
-                spawn_notification(session_id, config, {"cwd": "/Users/me/notifyme"})
-
-            with open(pending_path) as f:
-                data = json.load(f)
-            assert set(data.keys()) == {"seq", "sound", "app", "app_name", "project"}
-            assert data["app"] == "dev.warp.Warp"
-            assert data["app_name"] == "Warp"
-            assert data["project"] == "notifyme"
-            assert data["sound"] is False
-        finally:
-            if os.path.exists(pending_path):
-                os.remove(pending_path)
-
-    def test_spawns_notifier_with_correct_args(self):
-        session_id = "test-notifier-args"
-        pending_path = f"/tmp/notifyme-{session_id}.pending"
-        config = {"delay_seconds": 42, "sound": True}
-
-        try:
-            with patch("subprocess.Popen") as mock_popen, \
-                 patch("core.notify.detect_frontmost_app", return_value=("", "")):
-                spawn_notification(session_id, config)
-
-            mock_popen.assert_called_once()
-            cmd = mock_popen.call_args[0][0]
-            assert cmd[0].endswith("notifier.sh")
-            assert cmd[1] == "42"
-            assert cmd[2] == session_id
-            assert cmd[3].isdigit()
-            assert mock_popen.call_args[1]["start_new_session"] is True
-        finally:
-            if os.path.exists(pending_path):
-                os.remove(pending_path)
+        context = mock_notify.call_args[0][2]
+        assert set(context.keys()) == {"session_id", "app_bundle", "sound", "delay", "renotify_interval", "seq"}
+        assert context["session_id"] == "sess-2"
+        assert context["sound"] is False
+        assert context["delay"] == 5
+        assert context["renotify_interval"] == 90
 
     def test_works_without_input_data(self):
-        session_id = "test-no-input"
-        pending_path = f"/tmp/notifyme-{session_id}.pending"
-        config = {"delay_seconds": 1, "sound": True}
+        with patch("core.notify.notify_all") as mock_notify, \
+             patch("core.notify.detect_frontmost_app", return_value=("", "")):
+            spawn_notification("sess-3", {"delay_seconds": 1, "sound": True})
 
-        try:
-            with patch("subprocess.Popen"), \
-                 patch("core.notify.detect_frontmost_app", return_value=("", "")):
-                spawn_notification(session_id, config)  # no input_data arg
+        mock_notify.assert_called_once()
 
-            assert os.path.exists(pending_path)
-        finally:
-            if os.path.exists(pending_path):
-                os.remove(pending_path)
+    def test_different_sessions_produce_different_context(self):
+        contexts = []
+        with patch("core.notify.notify_all") as mock_notify, \
+             patch("core.notify.detect_frontmost_app", return_value=("", "")):
+            for sid in ["a", "b", "c"]:
+                spawn_notification(sid, {"delay_seconds": 1, "sound": True})
+                contexts.append(mock_notify.call_args[0][2])
 
-    def test_different_sessions_get_different_files(self):
-        config = {"delay_seconds": 1, "sound": True}
-        paths = []
+        session_ids = [c["session_id"] for c in contexts]
+        assert session_ids == ["a", "b", "c"]
 
-        try:
-            for sid in ["session-a", "session-b", "session-c"]:
-                path = f"/tmp/notifyme-{sid}.pending"
-                paths.append(path)
-                with patch("subprocess.Popen"), \
-                     patch("core.notify.detect_frontmost_app", return_value=("", "")):
-                    spawn_notification(sid, config)
+    def test_multi_channel_dispatch(self):
+        """spawn_notification with multiple channels calls all of them."""
+        with patch("core.notify.notify_all") as mock_notify, \
+             patch("core.notify.detect_frontmost_app", return_value=("com.app.Test", "Test")):
+            config = {"delay_seconds": 10, "sound": True, "channels": ["desktop", "slack"]}
+            spawn_notification("sess-multi", config, {"cwd": "/my/project"})
 
-            # All three should exist independently
-            for path in paths:
-                assert os.path.exists(path)
-        finally:
-            for path in paths:
-                if os.path.exists(path):
-                    os.remove(path)
+        mock_notify.assert_called_once()
+        _, _, _, passed_config = mock_notify.call_args[0]
+        assert passed_config["channels"] == ["desktop", "slack"]
